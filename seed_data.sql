@@ -36,7 +36,7 @@ INSERT INTO flight_search_cache (search_hash, origin, destination, departure_dat
 
 -- Hotel search cache
 INSERT INTO hotel_search_cache (search_hash, location, check_in, check_out, guests, rooms, results, result_count, expires_at, hit_count, created_at) VALUES
-('b2c3d4e5f6a789012345678901234567890abcde1234567890abcdef123456789', 'Tokyo', '2024-07-01', '2024-07-05', 2, 1,
+('b2c3d4e5f6a789012345678901234567890abcde1234567890abcdef12345678', 'Tokyo', '2024-07-01', '2024-07-05', 2, 1,
 '[{"hotel_id": "HT123", "hotel_name": "Park Hyatt Tokyo", "rating": 5.0, "price_per_night": 450, "total_price": 1800}, {"hotel_id": "HT456", "hotel_name": "Shibuya Excel Hotel", "rating": 4.2, "price_per_night": 180, "total_price": 720}]'::jsonb,
 2, NOW() + INTERVAL '30 minutes', 8, NOW() - INTERVAL '1 day');
 

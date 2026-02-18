@@ -8,13 +8,13 @@
 -- ============================================================================
 
 -- Application role (used by FastAPI backend)
-CREATE ROLE gth_app WITH LOGIN PASSWORD 'change_this_in_production';
+CREATE ROLE gth_app WITH LOGIN PASSWORD :'gth_app_password';
 
 -- Read-only role (for analytics, BI tools)
-CREATE ROLE gth_readonly WITH LOGIN PASSWORD 'change_this_in_production';
+CREATE ROLE gth_readonly WITH LOGIN PASSWORD :'gth_readonly_password';
 
 -- Admin role (for migrations, maintenance)
-CREATE ROLE gth_admin WITH LOGIN PASSWORD 'change_this_in_production';
+CREATE ROLE gth_admin WITH LOGIN PASSWORD :'gth_admin_password';
 
 -- ============================================================================
 -- 2. GRANT PERMISSIONS
@@ -69,6 +69,84 @@ BEGIN
     PERFORM set_config('app.current_tenant_id', tenant_id::TEXT, FALSE);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Function to set field encryption key for current connection/session
+-- Must be called by the backend before writes/reads of encrypted fields
+CREATE OR REPLACE FUNCTION set_field_encryption_key(encryption_key TEXT)
+RETURNS VOID AS $$
+BEGIN
+    PERFORM set_config('app.field_encryption_key', encryption_key, FALSE);
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Encrypt helper for sensitive text columns
+CREATE OR REPLACE FUNCTION encrypt_text_field(plain_text TEXT)
+RETURNS TEXT AS $$
+DECLARE
+    key_value TEXT;
+BEGIN
+    IF plain_text IS NULL OR plain_text = '' THEN
+        RETURN plain_text;
+    END IF;
+
+    -- Avoid double encryption on updates
+    IF plain_text LIKE 'enc::%' THEN
+        RETURN plain_text;
+    END IF;
+
+    key_value := current_setting('app.field_encryption_key', TRUE);
+    IF key_value IS NULL OR key_value = '' THEN
+        RAISE EXCEPTION 'app.field_encryption_key is not set';
+    END IF;
+
+    RETURN 'enc::' || encode(
+        pgp_sym_encrypt(plain_text, key_value, 'cipher-algo=aes256,compress-algo=1'),
+        'base64'
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Decrypt helper for sensitive text columns
+CREATE OR REPLACE FUNCTION decrypt_text_field(encrypted_text TEXT)
+RETURNS TEXT AS $$
+DECLARE
+    key_value TEXT;
+BEGIN
+    IF encrypted_text IS NULL OR encrypted_text = '' THEN
+        RETURN encrypted_text;
+    END IF;
+
+    IF encrypted_text NOT LIKE 'enc::%' THEN
+        RETURN encrypted_text;
+    END IF;
+
+    key_value := current_setting('app.field_encryption_key', TRUE);
+    IF key_value IS NULL OR key_value = '' THEN
+        RAISE EXCEPTION 'app.field_encryption_key is not set';
+    END IF;
+
+    RETURN pgp_sym_decrypt(
+        decode(substring(encrypted_text FROM 6), 'base64'),
+        key_value
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Encrypt OAuth tokens before persistence
+CREATE OR REPLACE FUNCTION encrypt_oauth_tokens_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.access_token IS NOT NULL THEN
+        NEW.access_token := encrypt_text_field(NEW.access_token);
+    END IF;
+
+    IF NEW.refresh_token IS NOT NULL THEN
+        NEW.refresh_token := encrypt_text_field(NEW.refresh_token);
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
 
 -- ============================================================================
 -- 4. RLS POLICIES
@@ -137,6 +215,20 @@ ALTER TABLE chat_messages FORCE ROW LEVEL SECURITY;
 ALTER TABLE bookings FORCE ROW LEVEL SECURITY;
 ALTER TABLE booking_items FORCE ROW LEVEL SECURITY;
 ALTER TABLE oauth_accounts FORCE ROW LEVEL SECURITY;
+
+-- Token encryption trigger
+DROP TRIGGER IF EXISTS tr_encrypt_oauth_tokens ON oauth_accounts;
+CREATE TRIGGER tr_encrypt_oauth_tokens
+    BEFORE INSERT OR UPDATE OF access_token, refresh_token ON oauth_accounts
+    FOR EACH ROW EXECUTE FUNCTION encrypt_oauth_tokens_trigger();
+
+-- Restrict token visibility for read-only role
+REVOKE SELECT ON oauth_accounts FROM gth_readonly;
+
+-- Function execution permissions
+GRANT EXECUTE ON FUNCTION set_field_encryption_key(TEXT) TO gth_app, gth_admin;
+GRANT EXECUTE ON FUNCTION encrypt_text_field(TEXT) TO gth_app, gth_admin;
+GRANT EXECUTE ON FUNCTION decrypt_text_field(TEXT) TO gth_app, gth_admin;
 
 -- ============================================================================
 -- 5. AUDIT LOGGING (Optional - track data changes)

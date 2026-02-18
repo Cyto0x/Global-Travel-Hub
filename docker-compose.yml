@@ -1,23 +1,26 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
     container_name: gth-postgres
     environment:
-      POSTGRES_USER: gth_user
-      POSTGRES_PASSWORD: gth_password
-      POSTGRES_DB: global_travel_hub
+      POSTGRES_USER: ${POSTGRES_USER:-gth_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-global_travel_hub}
+      GTH_APP_PASSWORD: ${GTH_APP_PASSWORD}
+      GTH_READONLY_PASSWORD: ${GTH_READONLY_PASSWORD}
+      GTH_ADMIN_PASSWORD: ${GTH_ADMIN_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./seed_data.sql:/docker-entrypoint-initdb.d/02-seed.sql
+      - ./init-security.sh:/docker-entrypoint-initdb.d/02-security.sh
+      - ./security.sql:/docker-entrypoint-initdb.d/security.sql.tmpl
+      - ./seed_data.sql:/docker-entrypoint-initdb.d/03-seed.sql
     command: >
       postgres  -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U gth_user -d global_travel_hub" ]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gth_user} -d ${POSTGRES_DB:-global_travel_hub}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -25,29 +28,30 @@ services:
   redis:
     image: redis:7-alpine
     container_name: gth-redis
-    ports:
-      - "6379:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    expose:
+      - "6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      test: [ "CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" ping" ]
       interval: 5s
       timeout: 5s
       retries: 5
 
   pgbouncer:
-    image: pgbouncer/pgbouncer:1.20
+    image: pgbouncer/pgbouncer:latest
     container_name: gth-pgbouncer
     environment:
-      DATABASES_HOST: postgres
-      DATABASES_PORT: 5432
-      DATABASES_DATABASE: global_travel_hub
-      DATABASES_USER: gth_user
-      DATABASES_PASSWORD: gth_password
-      POOL_MODE: transaction
-      MAX_CLIENT_CONN: 1000
-      DEFAULT_POOL_SIZE: 25
+      DATABASES: "*=host=postgres. port=5432 dbname=${POSTGRES_DB:-global_travel_hub} user=gth_app password=${GTH_APP_PASSWORD}"
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: 1000
+      PGBOUNCER_DEFAULT_POOL_SIZE: 25
+      PGBOUNCER_LISTEN_PORT: 5432
+      PGBOUNCER_LOG_POOLER_ERRORS: 1
+      QUIET: 1
     ports:
       - "6432:5432"
     depends_on:

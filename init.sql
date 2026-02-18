@@ -376,7 +376,7 @@ CREATE TYPE analytics_event_type AS ENUM (
 );
 
 CREATE TABLE analytics_events (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID NOT NULL DEFAULT uuid_generate_v4(),
     
     event_type analytics_event_type NOT NULL,
     
@@ -393,6 +393,8 @@ CREATE TABLE analytics_events (
     
     -- Partition key
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+,
+    PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
 
 -- Monthly partitions for analytics
@@ -429,14 +431,12 @@ CREATE INDEX idx_chat_messages_session ON chat_messages(session_id, created_at D
 CREATE INDEX idx_chat_messages_role ON chat_messages(role) WHERE role = 'ai';
 
 -- Cache indexes (TTL cleanup)
-CREATE INDEX idx_flight_cache_expires ON flight_search_cache(expires_at) 
-    WHERE expires_at < NOW();
+CREATE INDEX idx_flight_cache_expires ON flight_search_cache(expires_at);
 CREATE INDEX idx_flight_cache_hash ON flight_search_cache(search_hash);
 CREATE INDEX idx_flight_cache_route ON flight_search_cache(origin, destination, departure_date);
 CREATE INDEX idx_flight_cache_hits ON flight_search_cache(hit_count DESC);
 
-CREATE INDEX idx_hotel_cache_expires ON hotel_search_cache(expires_at) 
-    WHERE expires_at < NOW();
+CREATE INDEX idx_hotel_cache_expires ON hotel_search_cache(expires_at);
 CREATE INDEX idx_hotel_cache_hash ON hotel_search_cache(search_hash);
 CREATE INDEX idx_hotel_cache_location ON hotel_search_cache(location, check_in, check_out);
 

@@ -1,0 +1,434 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  user
+  admin
+  support
+}
+
+enum UserStatus {
+  active
+  inactive
+  suspended
+  deleted
+}
+
+enum OAuthProvider {
+  google
+  apple
+  facebook
+}
+
+enum ChatSessionStatus {
+  active
+  archived
+  deleted
+}
+
+enum MessageRole {
+  user
+  ai
+  system
+  tool
+}
+
+enum BookingStatus {
+  pending
+  confirmed
+  cancelled
+  completed
+  refunded
+}
+
+enum BookingItemType {
+  flight
+  hotel
+}
+
+enum PaymentStatus {
+  pending
+  completed
+  failed
+  refunded
+}
+
+enum AnalyticsEventType {
+  page_view
+  search_flight
+  search_hotel
+  chat_started
+  chat_message
+  booking_initiated
+  booking_completed
+  cache_hit
+  cache_miss
+  error_occurred
+}
+
+// ============================================================================
+// USER MODELS
+// ============================================================================
+
+model User {
+  id    String @id @default(uuid()) @db.Uuid
+  email String
+  emailVerified Boolean @default(false) @map("email_verified")
+  hashedPassword String? @map("hashed_password")
+  
+  fullName String? @map("full_name")
+  avatarUrl String? @map("avatar_url")
+  phone String?
+  
+  role UserRole @default(user)
+  status UserStatus @default(active)
+  
+  // GDPR
+  dataProcessingConsent Boolean @default(false) @map("data_processing_consent")
+  consentGrantedAt DateTime? @map("consent_granted_at") @db.Timestamptz(6)
+  marketingConsent Boolean @default(false) @map("marketing_consent")
+  
+  // Security
+  failedLoginAttempts Int @default(0) @map("failed_login_attempts")
+  lockedUntil DateTime? @map("locked_until") @db.Timestamptz(6)
+  lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(6)
+  lastIpAddress String? @map("last_ip_address") @db.Inet
+  
+  // Multi-tenant
+  tenantId String? @map("tenant_id") @db.Uuid
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+  
+  // Relations
+  oauthAccounts OAuthAccount[]
+  chatSessions  ChatSession[]
+  bookings      Booking[]
+  analyticsEvents AnalyticsEvent[]
+  
+  @@unique([email], name: "users_email_unique", map: "uq_users_email")
+  @@index([status], map: "ix_users_status")
+  @@index([role], map: "ix_users_role")
+  @@index([tenantId], map: "ix_users_tenant")
+  @@index([createdAt], map: "ix_users_created_at")
+  @@map("users")
+}
+
+model OAuthAccount {
+  id    String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  provider OAuthProvider
+  providerUserId String @map("provider_user_id")
+  providerEmail String? @map("provider_email")
+  accessToken String? @map("access_token")
+  refreshToken String? @map("refresh_token")
+  expiresAt DateTime? @map("expires_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([provider, providerUserId], name: "oauth_provider_account_unique", map: "uq_oauth_provider_account")
+  @@index([userId], map: "ix_oauth_user")
+  @@map("oauth_accounts")
+}
+
+// ============================================================================
+// CHAT MODELS
+// ============================================================================
+
+model ChatSession {
+  id    String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  title String?
+  status ChatSessionStatus @default(active)
+  
+  // LangGraph
+  threadId String? @map("thread_id") @db.Uuid
+  checkpointNs String? @map("checkpoint_ns")
+  
+  context Json @default("{}")
+  
+  messageCount Int @default(0) @map("message_count")
+  totalTokensUsed Int @default(0) @map("total_tokens_used")
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  endedAt DateTime? @map("ended_at") @db.Timestamptz(6)
+  
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+  bookings Booking[]
+  
+  @@index([userId], map: "ix_chat_sessions_user")
+  @@index([status], map: "ix_chat_sessions_status")
+  @@index([threadId], map: "ix_chat_sessions_thread")
+  @@index([updatedAt], map: "ix_chat_sessions_updated")
+  @@map("chat_sessions")
+}
+
+model ChatMessage {
+  id    String @id @default(uuid()) @db.Uuid
+  sessionId String @map("session_id") @db.Uuid
+  role MessageRole
+  content String
+  
+  // AI fields
+  model String?
+  tokensPrompt Int? @map("tokens_prompt")
+  tokensCompletion Int? @map("tokens_completion")
+  tokensTotal Int? @map("tokens_total")
+  latencyMs Int? @map("latency_ms")
+  
+  toolCalls Json? @map("tool_calls")
+  toolCallId String? @map("tool_call_id")
+  metadata Json @default("{}")
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  
+  session ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  @@index([sessionId, createdAt], map: "ix_chat_messages_session_created")
+  @@index([role], map: "ix_chat_messages_role")
+  @@map("chat_messages")
+}
+
+// ============================================================================
+// CACHE MODELS
+// ============================================================================
+
+model FlightSearchCache {
+  id    String @id @default(uuid()) @db.Uuid
+  searchHash String @unique @map("search_hash")
+  
+  origin String @db.VarChar(3)
+  destination String @db.VarChar(3)
+  departureDate DateTime @map("departure_date") @db.Date
+  returnDate DateTime? @map("return_date") @db.Date
+  passengersAdults Int @default(1) @map("passengers_adults")
+  passengersChildren Int @default(0) @map("passengers_children")
+  passengersInfants Int @default(0) @map("passengers_infants")
+  cabinClass String @default("economy") @map("cabin_class")
+  
+  results Json
+  resultCount Int @default(0) @map("result_count")
+  
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  hitCount Int @default(1) @map("hit_count")
+  lastAccessedAt DateTime @default(now()) @map("last_accessed_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  
+  @@index([expiresAt], map: "ix_flight_cache_expires")
+  @@index([origin, destination, departureDate], map: "ix_flight_cache_route")
+  @@index([hitCount], map: "ix_flight_cache_hits")
+  @@map("flight_search_cache")
+}
+
+model HotelSearchCache {
+  id    String @id @default(uuid()) @db.Uuid
+  searchHash String @unique @map("search_hash")
+  
+  location String
+  checkIn DateTime @map("check_in") @db.Date
+  checkOut DateTime @map("check_out") @db.Date
+  guests Int @default(1)
+  rooms Int @default(1)
+  
+  starRating Int[] @map("star_rating")
+  priceMin Decimal? @map("price_min") @db.Decimal(10, 2)
+  priceMax Decimal? @map("price_max") @db.Decimal(10, 2)
+  amenities String[]
+  
+  results Json
+  resultCount Int @default(0) @map("result_count")
+  
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+  hitCount Int @default(1) @map("hit_count")
+  lastAccessedAt DateTime @default(now()) @map("last_accessed_at") @db.Timestamptz(6)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  
+  @@index([expiresAt], map: "ix_hotel_cache_expires")
+  @@index([location, checkIn, checkOut], map: "ix_hotel_cache_location")
+  @@map("hotel_search_cache")
+}
+
+// ============================================================================
+// BOOKING MODELS
+// ============================================================================
+
+model Booking {
+  id    String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  
+  bookingReference String @unique @map("booking_reference")
+  status BookingStatus @default(pending)
+  paymentStatus PaymentStatus @default(pending) @map("payment_status")
+  
+  totalAmount Decimal @map("total_amount") @db.Decimal(12, 2)
+  currency String @default("USD")
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  taxAmount Decimal @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  
+  contactEmail String @map("contact_email")
+  contactPhone String? @map("contact_phone")
+  
+  metadata Json @default("{}")
+  specialRequests String? @map("special_requests")
+  
+  chatSessionId String? @map("chat_session_id") @db.Uuid
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+  chatSession ChatSession? @relation(fields: [chatSessionId], references: [id])
+  items BookingItem[]
+  
+  @@index([userId, createdAt], map: "ix_bookings_user")
+  @@index([bookingReference], map: "ix_bookings_reference")
+  @@index([status], map: "ix_bookings_status")
+  @@index([chatSessionId], map: "ix_bookings_chat_session")
+  @@index([createdAt], map: "ix_bookings_created")
+  @@map("bookings")
+}
+
+model BookingItem {
+  id    String @id @default(uuid()) @db.Uuid
+  bookingId String @map("booking_id") @db.Uuid
+  
+  itemType BookingItemType @map("item_type")
+  itemSequence Int @map("item_sequence")
+  
+  flightBookingId String? @map("flight_booking_id") @db.Uuid
+  hotelBookingId String? @map("hotel_booking_id") @db.Uuid
+  
+  itemPrice Decimal @map("item_price") @db.Decimal(12, 2)
+  itemCurrency String @default("USD") @map("item_currency")
+  
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  flightBooking FlightBooking? @relation(fields: [flightBookingId], references: [id])
+  hotelBooking HotelBooking? @relation(fields: [hotelBookingId], references: [id])
+  
+  @@unique([bookingId, itemSequence], name: "booking_item_sequence_unique", map: "uq_booking_item_sequence")
+  @@index([bookingId], map: "ix_booking_items_booking")
+  @@map("booking_items")
+}
+
+model FlightBooking {
+  id    String @id @default(uuid()) @db.Uuid
+  
+  bookingReference String @map("booking_reference")
+  airlineCode String @map("airline_code") @db.VarChar(3)
+  airlineName String? @map("airline_name")
+  flightNumber String @map("flight_number")
+  
+  origin String @db.VarChar(3)
+  destination String @db.VarChar(3)
+  
+  departureTime DateTime @map("departure_time") @db.Timestamptz(6)
+  arrivalTime DateTime @map("arrival_time") @db.Timestamptz(6)
+  
+  aircraftType String? @map("aircraft_type")
+  cabinClass String @default("economy") @map("cabin_class")
+  
+  passengers Json
+  passengerCount Int @default(1) @map("passenger_count")
+  
+  checkedBags Int @default(0) @map("checked_bags")
+  carryOnIncluded Boolean @default(true) @map("carry_on_included")
+  
+  externalBookingId String? @map("external_booking_id")
+  externalFlightId String? @map("external_flight_id")
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  
+  items BookingItem[]
+  
+  @@index([origin, destination], map: "ix_flight_bookings_route")
+  @@index([departureTime], map: "ix_flight_bookings_departure")
+  @@index([bookingReference], map: "ix_flight_bookings_reference")
+  @@map("flight_bookings")
+}
+
+model HotelBooking {
+  id    String @id @default(uuid()) @db.Uuid
+  
+  bookingReference String @map("booking_reference")
+  hotelId String @map("hotel_id")
+  hotelName String @map("hotel_name")
+  hotelAddress String? @map("hotel_address")
+  hotelRating Decimal? @map("hotel_rating") @db.Decimal(2, 1)
+  
+  roomType String @map("room_type")
+  roomDescription String? @map("room_description")
+  bedType String? @map("bed_type")
+  
+  checkIn DateTime @map("check_in") @db.Date
+  checkOut DateTime @map("check_out") @db.Date
+  nights Int
+  guests Int @default(1)
+  rooms Int @default(1)
+  
+  breakfastIncluded Boolean @default(false) @map("breakfast_included")
+  freeCancellation Boolean @default(false) @map("free_cancellation")
+  cancellationDeadline DateTime? @map("cancellation_deadline") @db.Timestamptz(6)
+  
+  guestsDetails Json @map("guests_details")
+  
+  externalBookingId String? @map("external_booking_id")
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  
+  items BookingItem[]
+  
+  @@index([checkIn], map: "ix_hotel_bookings_checkin")
+  @@index([hotelId], map: "ix_hotel_bookings_hotel")
+  @@map("hotel_bookings")
+}
+
+// ============================================================================
+// ANALYTICS MODELS
+// ============================================================================
+
+model AnalyticsEvent {
+  id    String @id @default(uuid()) @db.Uuid
+  
+  eventType AnalyticsEventType @map("event_type")
+  
+  userId String? @map("user_id") @db.Uuid
+  sessionId String? @map("session_id")
+  
+  eventData Json @map("event_data")
+  
+  ipAddress String? @map("ip_address") @db.Inet
+  userAgent String? @map("user_agent")
+  
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  
+  user User? @relation(fields: [userId], references: [id])
+  
+  @@index([eventType, createdAt], map: "ix_analytics_type_time")
+  @@index([userId, createdAt], map: "ix_analytics_user")
+  @@index([sessionId, createdAt], map: "ix_analytics_session")
+  @@map("analytics_events")
+}

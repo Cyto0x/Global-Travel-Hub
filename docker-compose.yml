@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: gth-postgres
+    environment:
+      POSTGRES_USER: gth_user
+      POSTGRES_PASSWORD: gth_password
+      POSTGRES_DB: global_travel_hub
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./seed_data.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    command: >
+      postgres  -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U gth_user -d global_travel_hub" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: gth-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgbouncer:
+    image: pgbouncer/pgbouncer:1.20
+    container_name: gth-pgbouncer
+    environment:
+      DATABASES_HOST: postgres
+      DATABASES_PORT: 5432
+      DATABASES_DATABASE: global_travel_hub
+      DATABASES_USER: gth_user
+      DATABASES_PASSWORD: gth_password
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 25
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
